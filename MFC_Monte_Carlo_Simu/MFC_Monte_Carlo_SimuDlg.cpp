@@ -7,6 +7,7 @@
 #include "MFC_Monte_Carlo_SimuDlg.h"
 #include "afxdialogex.h"
 #include <omp.h>
+#include <stdio.h>
 
 extern "C" {
 	#include "spa/spa.h"
@@ -350,6 +351,11 @@ UINT proess_monte(PVOID pParam)
 	int iterations;
 	double sum_var = 0;
 	int i;
+	double delta_sample;
+	double r_sample;
+	int seg_start, seg_end;
+	FILE *pf = NULL;
+	char ch[100] = {0};
 
 	TestResources *pRes = (TestResources *)pParam;
 	HWND hWnd = pRes->hWnd;
@@ -396,41 +402,66 @@ UINT proess_monte(PVOID pParam)
 	dlg->GetDlgItem(IDC_EDIT_EbN0_dB)->GetWindowText(str);
 	double EbN0_dB = _wtof(str);
 
-	//step 2:
-#pragma omp parallel for
-	for (i = 0; i < N0; i++)
-	{
-		ret = spa(max_iterations, EbN0_dB, &iterations);
-		if (iterations == max_iterations)
+	seg_start = 0;
+	seg_end = N0;
+	do {
+		//step 2:
+	#pragma omp parallel for
+		for (i  = seg_start; i < seg_end; i++)
 		{
-			y[i] = 1;
+			ret = spa(max_iterations, EbN0_dB, &iterations);
+			if (iterations == max_iterations)
+			{
+				y[i] = 1;
+			}
+			else
+			{
+				y[i] = 0;
+			}			
+		}	
+	#pragma omp parallel for reduction(+:sum)
+		for (i = seg_start; i < seg_end; i++)
+		{
+			sum = sum + y[i];
 		}
-		else
+
+		//step 3:
+		y_mean = sum / seg_end;
+
+		for (i = seg_start; i < seg_end; i++)
 		{
-			y[i] = 0;
-		}			
-	}
+			sum_var = sum_var + pow(y[i] - y_mean, 2);
+		}
+		s = sqrt(sum_var / seg_end);
+
+		delta_sample = s * t_half_alp / sqrt(seg_end - 1);
+		r_sample = delta_sample / abs(y_mean);
+		dlg->monte_carol_count = seg_end;
+
+		time_t timer;
+		timer = time(NULL);
+		struct tm tblock;
+		localtime_s(&tblock, &timer);
+		char strTmp[100];
+		asctime_s(strTmp, &tblock);
+
+		sprintf_s(ch, "%f\t %d\t %f\t %f\t %s", 
+			EbN0_dB, dlg->monte_carol_count, delta_sample, r_sample, strTmp);
+		fopen_s(&pf, dlg->file_path, "a+");
+		fputs(ch, pf);
+
+		fclose(pf);
+
+		seg_start = seg_end;
+		seg_end = seg_end + 1000;
+	} while ((delta_sample > delta) || (r_sample > r));
 
 
-#pragma omp parallel for reduction(+:sum)
-	for (i = 0; i < N0; i++)
-	{
-		sum = sum + y[i];
-	}
+
+
 	
 
-	//step 3:
-	dlg->monte_carol_count = N0;
-	y_mean = sum / dlg->monte_carol_count;
 
-	for (int j = 0; j < N0; j++)
-	{
-		sum_var = sum_var + pow(y[j] - y_mean, 2);
-	}
-	s = sqrt(sum_var / dlg->monte_carol_count);
-
-	double delta_sample = s * t_half_alp / sqrt(dlg->monte_carol_count - 1);
-	double r_sample = delta_sample / abs(y_mean);
 
 	//step 4:
 	for (; dlg->monte_carol_count < Nmax; dlg->monte_carol_count++)
@@ -475,7 +506,7 @@ UINT proess_monte(PVOID pParam)
 void CMFCMonteCarloSimuDlg::OnBnClickedButtonlog()
 {
 	// TODO: Add your control notification handler code here
-	char * ch = "EbN0_dB	Cycle	delta	r	Time\n";
+	char * ch = "EbN0_dB\t Cycle\t delta\t r\t Time\n";
 	CFileDialog fileDlg(TRUE, _T(".log"), NULL, 0, _T("(*.log)|*.log|All Files(*.*)|*.*||"));
 
 	if (IDOK == fileDlg.DoModal())
@@ -486,7 +517,7 @@ void CMFCMonteCarloSimuDlg::OnBnClickedButtonlog()
 
 		FILE *pf = NULL;
 		errno_t ret;
-		char file_path[100];
+		
 		WideCharToMultiByte(CP_ACP, 0, des, des.GetLength() + 1, file_path, 100, NULL, NULL);
 
 		ret = fopen_s(&pf, file_path, "w+");

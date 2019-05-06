@@ -62,4 +62,5 @@ public:
 	afx_msg void OnTimer(UINT_PTR nIDEvent);
 	int monte_carol_count;
 	afx_msg void OnBnClickedButtonlog();
+	char file_path[100];
 };
